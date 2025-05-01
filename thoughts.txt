@@ -1,0 +1,16 @@
+
+Au niveau des technical skills il faudrait:
+- une page d'administration qui me permette d'éditer ces technical skills (CRUD)
+- pour le moment la page d'administration est accessible à tout le monde
+Au niveau des technical skills, je pense qu'il faudrait les segments suivants:
+- famille (ex: language, platform, tool, environment, ...)
+- nom d'un élément d'une famille 
+- chaque élément pourrait avoir des versions différentes
+Exemples: 
+* language:  Java, versions 1, 2, 3, 4...
+* platform:  Windows, 11
+* tool: Git, ...
+...
+
+Pourrais-tu générer la structure au niveau de la base de données qui me permette de gérer ces technical skills.
+Applique les modifications nécessaire au site web afin de les gérer à partir d'une page d'administration

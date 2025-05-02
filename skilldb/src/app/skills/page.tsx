@@ -21,17 +21,19 @@ type SkillVersion = Tables<'skill_versions'>;
 type UserSkillWithDetails = UserSkill & {
   skill: (Skill & { family: SkillFamily }) | null;
   version: SkillVersion | null;
+  comment?: string | null;
 };
 
 const skillFormSchema = z.object({
   familyId: z.string().min(1, 'Veuillez sélectionner une famille'),
   skillId: z.string().min(1, 'Veuillez sélectionner une compétence'),
   versionId: z.string().optional(),
-  level: z.number().min(1, 'Le niveau doit être au moins 1').max(5, 'Le niveau ne peut pas dépasser 5'),
+  level: z.string().min(1, 'Veuillez sélectionner un niveau'),
   hasCertification: z.boolean(),
   certificationName: z.string().optional(),
   certificationDate: z.string().optional(),
   certificationExpiry: z.string().optional(),
+  comment: z.string().optional(),
 }).refine(data => !data.hasCertification || (data.certificationName && data.certificationDate), {
   message: "Le nom et la date de certification sont requis si 'Possède une certification' est coché.",
   path: ['certificationName'],
@@ -76,11 +78,12 @@ export default function SkillsPage() {
       familyId: '',
       skillId: '',
       versionId: '',
-      level: 1,
+      level: '',
       hasCertification: false,
       certificationName: '',
       certificationDate: '',
       certificationExpiry: '',
+      comment: '',
     }
   });
   
@@ -124,51 +127,67 @@ export default function SkillsPage() {
     fetchInitialData();
   }, [fetchInitialData]);
 
+  // Fetch skills when family changes (but not during initial edit load)
   useEffect(() => {
     const fetchSkillsByFamily = async () => {
-      if (!watchedFamilyId) {
-        setFilteredSkills([]);
-        setValue('skillId', '');
-        setValue('versionId', '');
+      // Don't run if no family selected OR if we are editing (handleEdit takes care of initial load)
+      if (!watchedFamilyId || isEditing) {
+          if (!isEditing && !watchedFamilyId) { // Clear skills if family is deselected when not editing
+             setFilteredSkills([]);
+             setValue('skillId', '');
+             setValue('versionId', '');
+          }
         return;
       }
+
       try {
+        setIsLoading(true); // Indicate loading state
         const { data: skillsData, error: skillsError } = await supabase
           .from('skills')
           .select('*')
           .eq('family_id', watchedFamilyId)
-          .eq('type', skillType)
+          .eq('type', skillType) // Ensure we respect the skill type toggle
           .order('name');
 
         if (skillsError) throw skillsError;
 
-        const userSkillIdsInFamily = userSkills
-          .filter(us => us.skill?.family?.id === watchedFamilyId)
-          .map(us => us.skillId);
-
-        const availableSkillsInFamily = (skillsData || []).filter(
-          (skill: Skill) => skill.id && !userSkillIdsInFamily.includes(skill.id)
+        // Filter out skills already added by the user (when ADDING a new skill)
+        const currentUsersSkillIds = userSkills.map(us => us.skillId);
+        const skillsForDropdown = (skillsData || []).filter(
+          (skill: Skill) => skill.id && !currentUsersSkillIds.includes(skill.id)
         );
-        setFilteredSkills(availableSkillsInFamily);
-        setValue('skillId', '');
-        setValue('versionId', '');
+
+        setFilteredSkills(skillsForDropdown);
+        setValue('skillId', ''); // Reset skill selection when family changes
+        setValue('versionId', ''); // Reset version selection
+        setSkillVersions([]); // Clear versions
       } catch (err: any) {
-        console.error('Error fetching skills by family:', err);
-        setError('Erreur lors du chargement des compétences');
+        console.error('Error fetching skills for family:', err);
+        setError('Erreur lors du chargement des compétences pour la famille sélectionnée');
+        setFilteredSkills([]); // Clear skills on error
+      } finally {
+        setIsLoading(false); // Finish loading
       }
     };
 
     fetchSkillsByFamily();
-  }, [watchedFamilyId, userSkills, skillType, setValue]);
+  // Watch familyId, but also depend on isEditing, userSkills, skillType, setValue to ensure correct behavior
+  }, [watchedFamilyId, isEditing, userSkills, skillType, setValue]);
 
   useEffect(() => {
     const fetchVersionsBySkill = async () => {
+      // Do not run this effect if we are currently in the process of setting up the edit form
+      if (isEditing) {
+        return;
+      }
+
       if (!watchedSkillId) {
         setSkillVersions([]);
         setValue('versionId', '');
         return;
       }
       try {
+        // No need for setIsLoading here as it might conflict with other loading states
         const { data: versionsData, error: versionsError } = await supabase
           .from('skill_versions')
           .select('*')
@@ -177,15 +196,17 @@ export default function SkillsPage() {
 
         if (versionsError) throw versionsError;
         setSkillVersions(versionsData || []);
-        setValue('versionId', '');
+        // Don't reset versionId here automatically, let user choose or handleEdit set it
+        // setValue('versionId', ''); 
       } catch (err: any) {
         console.error('Error fetching skill versions:', err);
         setError('Erreur lors du chargement des versions');
+        setSkillVersions([]); // Clear versions on error
       }
     };
 
     fetchVersionsBySkill();
-  }, [watchedSkillId, setValue]);
+  }, [watchedSkillId, setValue, isEditing]); // Add isEditing dependency
   
   // Function to handle changing the skill type filter
   const handleSkillTypeChange = (newType: 'hard' | 'soft') => {
@@ -213,11 +234,12 @@ export default function SkillsPage() {
       userid: user.id,
       skillid: data.skillId,
       version_id: data.versionId || null,
-      level: data.level,
+      level: parseInt(data.level, 10),
       hascertification: data.hasCertification,
       certificationname: data.hasCertification ? data.certificationName : null,
       certificationdate: data.hasCertification ? data.certificationDate : null,
       certificationexpiry: data.hasCertification ? data.certificationExpiry : null,
+      comment: data.comment,
     };
 
     try {
@@ -226,11 +248,12 @@ export default function SkillsPage() {
           .from('user_skills')
           .update({
             version_id: data.versionId || null,
-            level: data.level,
+            level: parseInt(data.level, 10),
             hascertification: data.hasCertification,
             certificationname: data.hasCertification ? data.certificationName : null,
             certificationdate: data.hasCertification ? data.certificationDate : null,
-            certificationexpiry: data.hasCertification ? data.certificationExpiry : null
+            certificationexpiry: data.hasCertification ? data.certificationExpiry : null,
+            comment: data.comment,
           })
           .eq('id', selectedSkill.id);
         
@@ -275,21 +298,41 @@ export default function SkillsPage() {
       return;
     }
 
-    setSelectedSkill(userSkill);
     setIsEditing(true);
+    setSelectedSkill(userSkill);
+    setError(null);
+    setSuccess(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 
+    // Extract all information we'll need
     const familyId = userSkill.skill.family.id;
-    const skillId = userSkill.skillId;
+    const rawUserSkill = userSkill as any;
+    const skillId = rawUserSkill.skillid || userSkill.skillId;
     const versionId = userSkill.version_id || '';
-
-    setValue('familyId', familyId);
-    setValue('skillId', skillId);
-    setValue('level', userSkill.level);
-    setValue('hasCertification', userSkill.hasCertification || false);
-    setValue('certificationName', userSkill.certificationName || '');
-    setValue('certificationDate', userSkill.certificationDate || '');
-    setValue('certificationExpiry', userSkill.certificationExpiry || '');
-
+    const level = String(userSkill.level);
+    const hasCertification = userSkill.hasCertification || false;
+    const certificationName = userSkill.certificationName || '';
+    const certificationDate = userSkill.certificationDate || '';
+    const certificationExpiry = userSkill.certificationExpiry || '';
+    const comment = userSkill.comment || '';
+    
+    // STEP 1: Set up a reference to track when all cascading operations are complete
+    let editSetupComplete = false;
+    
+    // STEP 2: First, reset form with just the non-cascading fields
+    reset({
+      familyId: '', // Start with empty to avoid triggering effects
+      skillId: '',
+      versionId: '',
+      level: level,
+      hasCertification: hasCertification,
+      certificationName: certificationName,
+      certificationDate: certificationDate, 
+      certificationExpiry: certificationExpiry,
+      comment: comment,
+    });
+    
+    // STEP 3: Fetch all skills for this family to populate dropdown
     try {
       const { data: skillsData, error: skillsError } = await supabase
         .from('skills')
@@ -297,30 +340,61 @@ export default function SkillsPage() {
         .eq('family_id', familyId)
         .eq('type', skillType)
         .order('name');
+      
       if (skillsError) throw skillsError;
 
+      // STEP 4: Set filtered skills but don't trigger setValue yet
       setFilteredSkills(skillsData || []);
-
-      if (skillId) {
-        const { data: versionsData, error: versionsError } = await supabase
-          .from('skill_versions')
-          .select('*')
-          .eq('skill_id', skillId)
-          .order('version_name');
-        if (versionsError) throw versionsError;
-        setSkillVersions(versionsData || []);
-        setValue('versionId', versionId);
-      } else {
-        setSkillVersions([]);
-        setValue('versionId', '');
-      }
-
+      
+      // STEP 5: Now set the familyId which will cascade
+      setValue('familyId', familyId);
+      
+      // STEP 6: Wait a moment for React to update the UI with skills
+      setTimeout(() => {
+        // STEP 7: Now set the skillId after skills are loaded in the dropdown
+        setValue('skillId', skillId);
+        
+        // STEP 8: If there's a version, fetch versions for this skill and set versionId
+        if (skillId) {
+          // Use an async IIFE to handle version fetching and setting
+          (async () => {
+            try {
+              const { data: versionsData, error: versionsError } = await supabase
+                .from('skill_versions')
+                .select('*')
+                .eq('skill_id', skillId)
+                .order('version_name');
+                
+              if (versionsError) throw versionsError;
+              
+              setSkillVersions(versionsData || []);
+              
+              // Wait a moment to ensure the versions dropdown has been updated with options
+              setTimeout(() => {
+                if (versionId) {
+                  setValue('versionId', versionId);
+                }
+                
+                // STEP 10: Mark setup as complete
+                editSetupComplete = true;
+              }, 50); // Small delay to ensure versions dropdown is updated
+            } catch (err) {
+              console.error('[handleEdit] Error handling versions:', err);
+            }
+          })();
+        } else {
+          // No skill ID, so we're done
+          editSetupComplete = true;
+        }
+      }, 100);  // Small delay to ensure React has updated the DOM
+      
     } catch (err: any) {
-      console.error("Error pre-filling edit form:", err);
+      console.error("Error preparing edit form:", err);
       setError("Erreur lors de la préparation du formulaire de modification.");
+      cancelEdit();
     }
 
-  }, [setValue, skillType]);
+  }, [userSkills, skillType, setValue, reset]);
   
   const handleDelete = async (userSkill: UserSkillWithDetails) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette compétence ?')) return;
@@ -460,17 +534,12 @@ export default function SkillsPage() {
                 id="skillId"
                 {...register('skillId')}
                 className={`mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md ${errors.skillId ? 'border-red-500' : ''}`}
-                disabled={!watchedFamilyId || isEditing}
+                disabled={!watchedFamilyId}
               >
                 <option value="">-- Sélectionner une compétence --</option>
                 {filteredSkills.map((skill) => (
-                  <option key={skill.id} value={skill.id}>{skill.name}</option>
+                    <option key={skill.id} value={skill.id}>{skill.name}</option>
                 ))}
-                {isEditing && selectedSkill?.skill && (
-                  <option key={selectedSkill.skill.id} value={selectedSkill.skill.id}>
-                    {selectedSkill.skill.name}
-                  </option>
-                )}
               </select>
               {errors.skillId && <p className="mt-1 text-sm text-red-600">{errors.skillId.message}</p>}
             </div>
@@ -499,9 +568,10 @@ export default function SkillsPage() {
               </label>
               <select
                 id="level"
-                {...register('level', { valueAsNumber: true })}
+                {...register('level')}
                 className={`mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md ${errors.level ? 'border-red-500' : ''}`}
               >
+                 <option value="">-- Sélectionner un niveau --</option>
                  {[1, 2, 3, 4, 5].map((levelValue) => (
                   <option key={levelValue} value={levelValue}>
                     {getLevelDescription(levelValue)}
@@ -554,6 +624,20 @@ export default function SkillsPage() {
                 </div>
               </>
             )}
+
+            {/* Comment Field */}
+            <div className="col-span-1 md:col-span-3">
+              <label htmlFor="comment" className="block text-sm font-medium text-gray-700 mb-1">Commentaire (Optionnel)</label>
+              <textarea
+                id="comment"
+                {...register('comment')}
+                rows={3}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+                placeholder="Ajouter un commentaire..."
+                disabled={isSubmitting}
+              />
+              {errors.comment && <p className="mt-1 text-sm text-red-600">{errors.comment.message}</p>}
+            </div>
           </div>
 
            <div className="flex justify-end space-x-3 pt-5">
@@ -589,7 +673,8 @@ export default function SkillsPage() {
                          {userSkill.version?.version_name && ` (${userSkill.version.version_name})`}
                       </p>
                       <p className="text-sm text-gray-500">
-                        Niveau: <span className="font-semibold">{getLevelDescription(userSkill.level)}</span>
+                         {/* Ensure level is treated as number for description */}
+                         Niveau: <span className="font-semibold">{getLevelDescription(Number(userSkill.level))}</span>
                          {userSkill.hasCertification && (
                            <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                             Certifié

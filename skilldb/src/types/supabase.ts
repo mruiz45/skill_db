@@ -9,6 +9,44 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      certifications: {
+        Row: {
+          id: string
+          userskill_id: string
+          name: string
+          date: string
+          expiry_date: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          userskill_id: string
+          name: string
+          date: string
+          expiry_date?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          userskill_id?: string
+          name?: string
+          date?: string
+          expiry_date?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "certifications_userskill_id_fkey"
+            columns: ["userskill_id"]
+            isOneToOne: false
+            referencedRelation: "user_skills"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       experience_skills: {
         Row: {
           createdat: string | null
@@ -181,6 +219,7 @@ export type Database = {
           certificationname: string | null
           createdat: string | null
           hascertification: boolean | null
+          hastrainings: boolean | null
           id: string
           level: number
           skillid: string | null
@@ -194,6 +233,7 @@ export type Database = {
           certificationname?: string | null
           createdat?: string | null
           hascertification?: boolean | null
+          hastrainings?: boolean | null
           id?: string
           level: number
           skillid?: string | null
@@ -207,6 +247,7 @@ export type Database = {
           certificationname?: string | null
           createdat?: string | null
           hascertification?: boolean | null
+          hastrainings?: boolean | null
           id?: string
           level?: number
           skillid?: string | null
@@ -236,6 +277,44 @@ export type Database = {
             referencedRelation: "skill_versions"
             referencedColumns: ["id"]
           },
+        ]
+      }
+      trainings: {
+        Row: {
+          id: string
+          userskill_id: string
+          name: string
+          date: string
+          provider: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          userskill_id: string
+          name: string
+          date: string
+          provider?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          userskill_id?: string
+          name?: string
+          date?: string
+          provider?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trainings_userskill_id_fkey"
+            columns: ["userskill_id"]
+            isOneToOne: false
+            referencedRelation: "user_skills"
+            referencedColumns: ["id"]
+          }
         ]
       }
       users: {

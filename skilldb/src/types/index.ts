@@ -14,16 +14,39 @@ export type Skill = {
   description?: string;
 };
 
+export type Certification = {
+  id: string;
+  userskillId: string;
+  name: string;
+  date: string;
+  expiryDate?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Training = {
+  id: string;
+  userskillId: string;
+  name: string;
+  date: string;
+  provider?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type UserSkill = {
   id: string;
   userId: string;
   skillId: string;
   skill?: Skill;
   level: 1 | 2 | 3 | 4 | 5; // 1: Débutant, 5: Expert
+  hasTrainings?: boolean;
+  trainings?: Training[];
   hasCertification: boolean;
-  certificationName?: string;
-  certificationDate?: string;
-  certificationExpiry?: string;
+  certifications?: Certification[];
+  certificationName?: string; // Legacy field
+  certificationDate?: string; // Legacy field
+  certificationExpiry?: string; // Legacy field
   version_id?: string;
 };
 

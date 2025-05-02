@@ -5,17 +5,21 @@ import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { User, Skill, UserSkill } from '@/types';
+import { User, Skill, UserSkill, Certification } from '@/types';
+
+type SkillWithCertifications = {
+  skill: Skill;
+  level: number;
+  hasCertification: boolean;
+  certifications?: Certification[];
+  // Legacy fields for backwards compatibility
+  certificationName?: string;
+  certificationExpiry?: string;
+};
 
 type SearchResult = {
   user: User;
-  skills: { 
-    skill: Skill;
-    level: number;
-    hasCertification: boolean;
-    certificationName?: string;
-    certificationExpiry?: string;
-  }[];
+  skills: SkillWithCertifications[];
 };
 
 export default function SearchPage() {
@@ -107,16 +111,51 @@ export default function SearchPage() {
           return null;
         }
         
+        // Récupérer les certifications pour chaque compétence d'utilisateur
+        const userSkillsWithCertifications = await Promise.all(
+          userSkillsData.map(async (us: UserSkill) => {
+            const { data: certificationsData, error: certError } = await supabase
+              .from('certifications')
+              .select('*')
+              .eq('userskill_id', us.id);
+              
+            if (certError) {
+              console.error('Error fetching certifications:', certError);
+              return {
+                skill: us.skill as Skill,
+                level: us.level,
+                hasCertification: us.hasCertification,
+                certificationName: us.certificationName,
+                certificationExpiry: us.certificationExpiry,
+              };
+            }
+            
+            // Map database field names to our type
+            const certifications = (certificationsData || []).map(cert => ({
+              id: cert.id,
+              userskillId: cert.userskill_id,
+              name: cert.name,
+              date: cert.date,
+              expiryDate: cert.expiry_date,
+              createdAt: cert.created_at,
+              updatedAt: cert.updated_at
+            }));
+            
+            return {
+              skill: us.skill as Skill,
+              level: us.level,
+              hasCertification: us.hasCertification || certifications.length > 0,
+              certifications: certifications.length > 0 ? certifications : undefined,
+              certificationName: us.certificationName,
+              certificationExpiry: us.certificationExpiry,
+            };
+          })
+        );
+        
         // Formater les résultats
         return {
           user,
-          skills: userSkillsData.map((us: UserSkill) => ({
-            skill: us.skill as Skill,
-            level: us.level,
-            hasCertification: us.hasCertification,
-            certificationName: us.certificationName,
-            certificationExpiry: us.certificationExpiry,
-          })),
+          skills: userSkillsWithCertifications,
         };
       });
       
@@ -311,18 +350,43 @@ export default function SearchPage() {
                         {skillInfo.hasCertification && (
                           <div className="mt-1 text-xs">
                             <span className="text-green-600 font-medium">Certifié: </span>
-                            {skillInfo.certificationName}
-                            {skillInfo.certificationExpiry && (
-                              <span className={`ml-1 ${
-                                new Date(skillInfo.certificationExpiry) < new Date()
-                                  ? 'text-red-600'
-                                  : 'text-green-600'
-                              }`}>
-                                ({new Date(skillInfo.certificationExpiry) < new Date()
-                                  ? 'Expirée'
-                                  : `Valide jusqu'au ${new Date(skillInfo.certificationExpiry).toLocaleDateString()}`
-                                })
-                              </span>
+                            {skillInfo.certifications && skillInfo.certifications.length > 0 ? (
+                              <div className="ml-1">
+                                {skillInfo.certifications.map((cert, index) => (
+                                  <div key={cert.id} className={index > 0 ? 'mt-1' : ''}>
+                                    {cert.name}
+                                    {cert.date && ` (Obtenu le: ${new Date(cert.date).toLocaleDateString()})`}
+                                    {cert.expiryDate && (
+                                      <span className={`ml-1 ${
+                                        new Date(cert.expiryDate) < new Date()
+                                          ? 'text-red-600'
+                                          : 'text-green-600'
+                                      }`}>
+                                        ({new Date(cert.expiryDate) < new Date()
+                                          ? 'Expirée'
+                                          : `Valide jusqu'au ${new Date(cert.expiryDate).toLocaleDateString()}`
+                                        })
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <>
+                                {skillInfo.certificationName}
+                                {skillInfo.certificationExpiry && (
+                                  <span className={`ml-1 ${
+                                    new Date(skillInfo.certificationExpiry) < new Date()
+                                      ? 'text-red-600'
+                                      : 'text-green-600'
+                                  }`}>
+                                    ({new Date(skillInfo.certificationExpiry) < new Date()
+                                      ? 'Expirée'
+                                      : `Valide jusqu'au ${new Date(skillInfo.certificationExpiry).toLocaleDateString()}`
+                                    })
+                                  </span>
+                                )}
+                              </>
                             )}
                           </div>
                         )}

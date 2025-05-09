@@ -3,6 +3,8 @@ export type User = {
   email: string;
   fullName: string;
   role: 'developer' | 'devops' | 'pm' | 'architect' | 'admin';
+  phoneNumber?: string;
+  address?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -77,4 +79,6 @@ export type Experience = {
   endDate?: string;
   current: boolean;
   skills?: Skill[];
+  domain?: string;
+  specificDomain?: string;
 }; 

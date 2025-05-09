@@ -1,0 +1,8 @@
+User Email,Skill Family,Skill Name,Skill Type,Level,Skill Version,Comment,Certification Names,Certification Dates,Certification Expiry Dates,Training Names,Training Dates,Training Providers
+test@example.com,Langages de Programmation,JavaScript,Hard,4,ES2022,"Utilisé principalement pour le frontend React","","","",Formation Node.js;Atelier Performance Web,2023-11-15;2024-01-22,Dev Institute;Web Experts
+test@example.com,Cloud Computing,AWS,Hard,3,,Déploiement d'applications sur EC2 et S3,"AWS Certified Developer - Associate",2023-08-01,2025-08-01,"Introduction à AWS",2023-05-10,Cloud Guru
+anne.martin@example.com,Gestion de Projet,Scrum,Soft,5,,"Scrum Master sur 3 projets différents","CSM;PSM I",2022-05-20;2023-01-15,,"Formation Facilitation Agile",2022-09-05,Agile Corp
+anne.martin@example.com,Langages de Programmation,Python,Hard,4,3.10,"Analyse de données et scripting",,"","",Cours Data Science;Workshop Django REST,2023-03-10;2023-07-18,Data University;Dev Collective
+test@example.com,Bases de données,PostgreSQL,Hard,3,14,"Optimisation de requêtes","","",,"Administration PostgreSQL",2022-10-25,DB Masters
+luc.dupont@example.com,Communication,Feedback Constructif,Soft,4,,"Anime des sessions de feedback régulières","","","",Formation Communication Non Violente,2023-06-12,Human Skills Inc.
+luc.dupont@example.com,Cloud Computing,Azure,Hard,2,,"Utilisation basique pour VM et stockage","AZ-900 Azure Fundamentals",2024-02-28,,"",,

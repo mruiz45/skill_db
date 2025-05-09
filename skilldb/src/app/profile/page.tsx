@@ -163,7 +163,7 @@ export default function ProfilePage() {
         </div>
       </div>
       
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
         <div className="bg-white shadow-md rounded-lg p-6 flex flex-col h-full border border-gray-200 hover:shadow-lg transition-shadow duration-200">
           <h3 className="text-lg font-semibold text-gray-800 mb-3">
             Compétences techniques
@@ -178,6 +178,24 @@ export default function ProfilePage() {
               className="whitespace-normal text-center w-full"
             >
               Gérer mes compétences techniques
+            </Button>
+          </div>
+        </div>
+        
+        <div className="bg-white shadow-md rounded-lg p-6 flex flex-col h-full border border-gray-200 hover:shadow-lg transition-shadow duration-200">
+          <h3 className="text-lg font-semibold text-gray-800 mb-3">
+            CV
+          </h3>
+          <p className="text-gray-600 text-sm mb-5">
+            Gérez ou générez votre CV
+          </p>
+          <div className="mt-auto">
+            <Button
+              onClick={() => window.location.href = '/cv'}
+              variant="secondary"
+              className="whitespace-normal text-center w-full"
+            >
+              Gérer mon CV
             </Button>
           </div>
         </div>

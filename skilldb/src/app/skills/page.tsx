@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useForm, useFieldArray, FieldError } from 'react-hook-form';
+import { useForm, useFieldArray, FieldError, FieldValues, SubmitHandler } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '@/context/AuthContext';
@@ -29,6 +29,7 @@ type UserSkillUpsert = {
   version_id: string | null;
   hascertification: boolean | null;
   hastrainings: boolean | null;
+  years_experience: number | null;
 };
 
 // Define a more specific type for UserSkill with nested data
@@ -38,6 +39,7 @@ type UserSkillWithDetails = UserSkill & {
   comment?: string | null;
   certifications?: Certification[]; // Assuming Certification type aligns with Row type
   trainings?: Training[]; // Assuming Training type aligns with Row type
+  years_experience: number | null;
 };
 
 // Define a schema for a single certification
@@ -56,45 +58,28 @@ const trainingSchema = z.object({
   provider: z.string().optional().nullable(),
 });
 
-// Single unified schema - Hard skill fields are optional
-const skillFormSchema = z.object({
+// Base schema definition without refinements that cause ZodEffects
+const baseSkillFormObject = z.object({
   familyId: z.string().min(1, 'Veuillez sélectionner une famille'),
   skillId: z.string().min(1, 'Veuillez sélectionner une compétence'),
   level: z.string().min(1, 'Veuillez sélectionner un niveau'),
-  comment: z.string().optional().nullable(),
-  // Hard skill fields
-  versionId: z.string().optional().nullable(),
+  comment: z.string().transform(val => val === '' ? null : val).optional().nullable(),
+  yearsExperience: z.string(), // String from select, will be validated further in submission
+  versionId: z.string().transform(val => val === '' ? null : val).optional().nullable(),
   hasTrainings: z.boolean().optional(),
   trainings: z.array(trainingSchema).optional(),
   hasCertification: z.boolean().optional(),
   certifications: z.array(certificationSchema).optional(),
-})
-// Add refinements directly to the unified schema, but they will only be effectively
-// checked by our manual validation logic in onSubmit for hard skills.
-// Zod resolver will still run them, but we add manual checks before submission.
-.refine(data => {
-    // This refinement logic is effectively handled manually in onSubmit for hard skills
-    // Always return true here to avoid Zod blocking based on optional fields for soft skills
-    return true; 
-    // Original logic (moved to onSubmit):
-    // !data.hasCertification || (data.certifications && data.certifications.length > 0)
-  }, {
-    // We rely on manual setError in onSubmit for this message
-    message: "Au moins une certification est requise si la case est cochée.", 
-    path: ['certifications'], 
-})
-.refine(data => {
-    // This refinement logic is effectively handled manually in onSubmit for hard skills
-    return true; 
-    // Original logic (moved to onSubmit):
-    // !data.hasTrainings || (data.trainings && data.trainings.length > 0)
-  }, {
-    message: "Au moins une formation est requise si la case est cochée.",
-    path: ['trainings'], 
 });
 
-// Define the type based on the unified schema
-type SkillFormValues = z.infer<typeof skillFormSchema>;
+// Schema for the form resolver (can include general refinements if needed, but often problematic with extend)
+// For simplicity, we can use the base object and handle complex refinements in onSubmit.
+const skillFormSchemaForResolver = baseSkillFormObject; // Using the base object directly for resolver
+
+// The .refine for parsing yearsExperience to number can be part of the extended schema in onSubmit
+// or handled manually after parsing.
+
+type SkillFormValues = z.infer<typeof baseSkillFormObject>; // Infer from the base object
 
 // Helper function to map level number to description
 const getLevelDescription = (level: number): string => {
@@ -136,13 +121,14 @@ export default function SkillsPage() {
       clearErrors,
       formState: { errors } 
   } = useForm<SkillFormValues>({
-    resolver: zodResolver(skillFormSchema),
+    resolver: zodResolver(skillFormSchemaForResolver), // Use the simplified schema for resolver
     defaultValues: {
       familyId: '',
       skillId: '',
       level: '',
-      comment: '',
-      versionId: '',
+      comment: null,
+      yearsExperience: '', 
+      versionId: null,
       hasTrainings: false,
       trainings: [],
       hasCertification: false,
@@ -193,7 +179,17 @@ export default function SkillsPage() {
       const { data: userSkillsData, error: userSkillsError } = await supabase
         .from('user_skills')
         .select(`
-          *,
+          id,
+          userid,
+          skillid,
+          level,
+          comment,
+          version_id,
+          hascertification,
+          hastrainings,
+          createdat,
+          updatedat,
+          years_experience, 
           skill:skills!inner(*, family:skill_families!inner(*)),
           version:skill_versions(*),
           certifications(*),
@@ -238,6 +234,7 @@ export default function SkillsPage() {
                  createdAt: train.created_at,
                  updatedAt: train.updated_at
              })) || [],
+             years_experience: typedUS.years_experience,
           };
       });
       
@@ -336,8 +333,8 @@ export default function SkillsPage() {
     router.push(`/skills?type=${newType}`);
     // Reset everything when type changes
     reset({ 
-        familyId: '', skillId: '', level: '', comment: '',
-        versionId: '', hasTrainings: false, trainings: [], hasCertification: false, certifications: [] 
+        familyId: '', skillId: '', level: '', comment: null,
+        versionId: null, hasTrainings: false, trainings: [], hasCertification: false, certifications: [], yearsExperience: '' 
     });
     // Remove state setters that no longer exist
     // setSelectedFamilyId(''); 
@@ -351,8 +348,53 @@ export default function SkillsPage() {
     clearErrors(); // Clear validation errors
   };
 
-  const onSubmit = async (data: SkillFormValues) => {
-    if (!user) return;
+  const onSubmit: SubmitHandler<SkillFormValues> = async (data) => {
+    if (!user) {
+      setError('Vous devez être connecté pour ajouter une compétence.');
+      return;
+    }
+
+    let submissionSchemaTyped;
+    if (skillType === 'hard') {
+      submissionSchemaTyped = baseSkillFormObject.extend({
+        yearsExperience: z.string().min(1, "Les années d'expérience sont requises pour les compétences techniques.")
+          .transform(val => {
+              // This transform is critical for converting the string to number for validatedData
+              if (val === '' || val === null || val === undefined) return null; 
+              const num = parseInt(val, 10);
+              return Number.isNaN(num) ? null : num;
+          })
+          .refine(val => val === null || (Number.isInteger(val) && val >= 0), {
+              message: "Les années d'expérience doivent être un entier positif ou nul (après transformation).",
+          }),
+      });
+    } else {
+      // For soft skills, yearsExperience is optional (string from form can be empty, will be transformed to null)
+      submissionSchemaTyped = baseSkillFormObject.extend({
+        yearsExperience: z.string().optional().nullable() // Allow empty string from select
+          .transform(val => {
+            if (val === '' || val === null || val === undefined) return null;
+            const num = parseInt(val, 10);
+            return Number.isNaN(num) ? null : num;
+          })
+          .refine(val => val === null || (Number.isInteger(val) && val >= 0), {
+            message: "Les années d'expérience doivent être un entier positif ou nul.",
+          }),
+      });
+    }
+
+    const parsedData = submissionSchemaTyped.safeParse(data);
+
+    if (!parsedData.success) {
+        for (const issue of parsedData.error.issues) {
+            setFormError(issue.path[0] as keyof SkillFormValues, { message: issue.message });
+        }
+        setIsSubmitting(false);
+        return;
+    }
+    
+    // parsedData.data now has yearsExperience as number | null
+    const validatedData = parsedData.data;
 
     clearErrors(['certifications', 'trainings']);
     setError(null);
@@ -361,11 +403,11 @@ export default function SkillsPage() {
     // Manual validation: Check if arrays are empty when checkboxes are true
     // This validation now applies regardless of skillType
     let validationOk = true;
-    if (data.hasCertification && (!data.certifications || data.certifications.length === 0)) {
+    if (validatedData.hasCertification && (!validatedData.certifications || validatedData.certifications.length === 0)) {
       setFormError('certifications', { type: 'manual', message: 'Veuillez ajouter au moins une certification ou décocher la case.' });
       validationOk = false;
     }
-    if (data.hasTrainings && (!data.trainings || data.trainings.length === 0)) {
+    if (validatedData.hasTrainings && (!validatedData.trainings || validatedData.trainings.length === 0)) {
       setFormError('trainings', { type: 'manual', message: 'Veuillez ajouter au moins une formation ou décocher la case.' });
       validationOk = false;
     }
@@ -380,21 +422,21 @@ export default function SkillsPage() {
     // Prepare data for Supabase
     const skillDbData: UserSkillUpsert = {
       userid: user.id,
-      skillid: data.skillId,
-      level: parseInt(data.level, 10),
-      comment: data.comment || null,
-      // Include these fields regardless of type, their values come from the form
-      version_id: data.versionId || null, 
-      hascertification: data.hasCertification ?? false,
-      hastrainings: data.hasTrainings ?? false,
+      skillid: validatedData.skillId,
+      level: parseInt(validatedData.level, 10),
+      comment: validatedData.comment === undefined ? null : validatedData.comment,
+      version_id: skillType === 'hard' ? (validatedData.versionId === undefined ? null : validatedData.versionId) : null,
+      hascertification: skillType === 'hard' ? (validatedData.hasCertification || false) : null,
+      hastrainings: skillType === 'hard' ? (validatedData.hasTrainings || false) : null,
+      years_experience: validatedData.yearsExperience,
     };
 
     let certificationsToInsert: CertificationInsert[] = [];
     let trainingsToInsert: TrainingInsert[] = [];
 
     // Prepare arrays for insertion if checkboxes are checked (regardless of skillType)
-    if (skillDbData.hascertification && data.certifications) {
-      certificationsToInsert = data.certifications
+    if (skillDbData.hascertification && validatedData.certifications) {
+      certificationsToInsert = validatedData.certifications
         .filter(cert => cert.name && cert.date) 
         .map(cert => ({
           userskill_id: '', // Placeholder
@@ -403,8 +445,8 @@ export default function SkillsPage() {
           expiry_date: cert.expiryDate || null,
         }));
     }
-    if (skillDbData.hastrainings && data.trainings) {
-      trainingsToInsert = data.trainings
+    if (skillDbData.hastrainings && validatedData.trainings) {
+      trainingsToInsert = validatedData.trainings
         .filter(train => train.name && train.date)
         .map(train => ({
           userskill_id: '', // Placeholder
@@ -427,7 +469,7 @@ export default function SkillsPage() {
           .from('user_skills')
           .select('id')
           .eq('userid', user.id)
-          .eq('skillid', data.skillId)
+          .eq('skillid', validatedData.skillId)
           .maybeSingle();
         if (fetchError) throw fetchError;
         if (existingSkill) existingUserSkillId = existingSkill.id;
@@ -473,8 +515,8 @@ export default function SkillsPage() {
       setSuccess(existingUserSkillId ? 'Compétence mise à jour avec succès' : 'Compétence ajoutée avec succès');
       
       reset({ 
-        familyId: '', skillId: '', level: '', comment: '',
-        versionId: '', hasTrainings: false, trainings: [], hasCertification: false, certifications: [] 
+        familyId: '', skillId: '', level: '', comment: null,
+        versionId: null, hasTrainings: false, trainings: [], hasCertification: false, certifications: [], yearsExperience: '' 
       });
       setFilteredSkills([]); 
       setSkillVersions([]);
@@ -538,6 +580,7 @@ export default function SkillsPage() {
               date: training.date,
               provider: training.provider || '' 
           })),
+          yearsExperience: userSkill.years_experience === null || userSkill.years_experience === undefined ? '' : String(userSkill.years_experience),
       };
       
       // Reset the form with the prepared values
@@ -604,8 +647,8 @@ export default function SkillsPage() {
     setIsEditing(false);
     setSelectedSkill(null);
     reset({ // Reset to initial empty state
-        familyId: '', skillId: '', level: '', comment: '',
-        versionId: '', hasTrainings: false, trainings: [], hasCertification: false, certifications: [] 
+        familyId: '', skillId: '', level: '', comment: null,
+        versionId: null, hasTrainings: false, trainings: [], hasCertification: false, certifications: [], yearsExperience: '' 
     });
     // Remove state setters that no longer exist
     // setSelectedFamilyId('');
@@ -617,14 +660,10 @@ export default function SkillsPage() {
   };
   
   // Helper function to add a new certification field
-  const addCertification = () => {
-    appendCertification({ name: '', date: '', expiryDate: '' });
-  };
+  const addCertification = () => appendCertification({ name: '', date: '', expiryDate: null });
   
   // Helper function to add a new training field
-  const addTraining = () => {
-    appendTraining({ name: '', date: '', provider: '' });
-  };
+  const addTraining = () => appendTraining({ name: '', date: '', provider: null });
   
   if (loading) {
     return (
@@ -782,7 +821,31 @@ export default function SkillsPage() {
               {errors.level && <p className="mt-1 text-sm text-red-600">{errors.level.message}</p>}
             </div>
 
-            {/* Trainings Section (Ensure ALWAYS SHOWN) */}
+            {/* Years of Experience (Only for Hard Skills, correctly placed next to Level) */}
+            <div className={clsx(skillType === 'hard' && "lg:col-span-1")}>
+              {skillType === 'hard' && (
+                <>
+                  <label htmlFor="yearsExperience" className="block text-sm font-medium text-gray-700 mb-1">
+                    Années d'expérience <span className="text-red-500">*</span>
+                  </label>
+                  <select 
+                    id="yearsExperience"
+                    {...register('yearsExperience')} 
+                    className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${errors.yearsExperience ? 'border-red-500' : ''}`}
+                    disabled={isSubmitting}
+                  >
+                    <option value="">-- Sélectionner --</option>
+                    {Array.from({ length: 21 }, (_, i) => (
+                      <option key={i} value={String(i)}>{i} an(s)</option>
+                    ))}
+                    <option value="21">20+ an(s)</option>
+                  </select>
+                  {errors.yearsExperience && <p className="mt-1 text-xs text-red-600">{errors.yearsExperience.message}</p>}
+                </>
+              )}
+            </div>
+
+            {/* Trainings Section (Ensure ALWAYS SHOWN for both skill types, but content conditional) */}
             <div className="md:col-span-2 lg:col-span-3 flex items-center space-x-3 pt-4 border-t mt-4">
               <input
                 id="hasTrainings"

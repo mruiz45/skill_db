@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { Experience, Skill } from '@/types';
+import { fetchMetadata, MetadataOption } from '@/lib/metadata';
 
 const experienceSchema = z.object({
   company: z.string().min(1, 'Le nom de l\'entreprise est requis'),
@@ -24,21 +25,6 @@ const experienceSchema = z.object({
 
 type ExperienceFormValues = z.infer<typeof experienceSchema>;
 
-const industryDomains = ['Technology', 'Finance', 'Healthcare', 'Education', 'Manufacturing', 'Consulting', 'Retail', 'Government', 'Other'];
-
-// Added mapping for specific domains
-const domainSpecificMap: { [key: string]: string[] } = {
-  'Technology': ['Software Development', 'Data Science', 'Cybersecurity', 'Cloud Computing', 'IT Support', 'AI/ML', 'Blockchain'],
-  'Finance': ['Banking', 'Investment Management', 'Accounting', 'Insurance', 'Fintech', 'Quantitative Analysis'],
-  'Healthcare': ['Clinical Care', 'Pharmaceuticals', 'Medical Devices', 'Health Administration', 'Biotechnology', 'Medical Research'],
-  'Education': ['K-12 Education', 'Higher Education', 'EdTech', 'Vocational Training', 'Curriculum Development'],
-  'Manufacturing': ['Automotive', 'Aerospace', 'Electronics', 'Industrial Goods', 'Supply Chain Management', 'Quality Assurance'],
-  'Consulting': ['Management Consulting', 'IT Consulting', 'Financial Advisory', 'HR Consulting', 'Strategy Consulting'],
-  'Retail': ['E-commerce', 'Fashion & Apparel', 'Food & Beverage', 'Consumer Packaged Goods', 'Luxury Goods'],
-  'Government': ['Public Administration', 'Defense', 'Social Services', 'Policy Making', 'Regulatory Affairs', 'Other'],
-  'Other': ['Specify Other']
-};
-
 export default function ExperiencePage() {
   const { user, loading } = useAuth();
   const [experiences, setExperiences] = useState<Experience[]>([]);
@@ -51,7 +37,8 @@ export default function ExperiencePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ id: string; name: string }[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-  const [availableSpecificDomains, setAvailableSpecificDomains] = useState<string[]>([]); // New state
+  const [industryDomainOptions, setIndustryDomainOptions] = useState<MetadataOption[]>([]);
+  const [specificDomainOptions, setSpecificDomainOptions] = useState<MetadataOption[]>([]);
   
   // Configuration du formulaire
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<ExperienceFormValues>({
@@ -70,17 +57,21 @@ export default function ExperiencePage() {
   });
   
   const isCurrent = watch('current');
-  const selectedDomain = watch('domain'); // Watch the main domain field
+  const selectedDomainKey = watch('domain');
   
   // Effect to update available specific domains when the main domain changes
   useEffect(() => {
-    if (selectedDomain && domainSpecificMap[selectedDomain]) {
-      setAvailableSpecificDomains(domainSpecificMap[selectedDomain]);
+    if (selectedDomainKey) {
+      fetchMetadata('specific_domains', selectedDomainKey).then(options => {
+        setSpecificDomainOptions(options);
+      });
     } else {
-      setAvailableSpecificDomains([]);
+      setSpecificDomainOptions([]);
     }
-    setValue('specificDomain', ''); // Reset specific domain when main domain changes
-  }, [selectedDomain, setValue]);
+    if (!isEditing || (selectedExperience && selectedExperience.domain !== selectedDomainKey)) {
+      setValue('specificDomain', ''); // Reset specific domain when main domain changes or not editing same
+    }
+  }, [selectedDomainKey, setValue, isEditing, selectedExperience]);
   
   // Chargement des données
   useEffect(() => {
@@ -123,6 +114,10 @@ export default function ExperiencePage() {
         }));
         
         setAvailableSkills(formattedSkills);
+
+        fetchMetadata('industry_domains').then(options => {
+          setIndustryDomainOptions(options);
+        });
       } catch (err: any) {
         console.error('Error fetching experiences:', err);
         setError('Une erreur est survenue lors du chargement des données');
@@ -271,15 +266,7 @@ export default function ExperiencePage() {
     setValue('current', experience.current);
     setValue('endDate', experience.endDate ? experience.endDate.substring(0, 10) : '');
     
-    // Set domain first, which will trigger the useEffect to populate specific domains
     setValue('domain', experience.domain || '');
-    // Then set specificDomain. A slight delay or a more robust solution might be needed if options aren't ready.
-    // For now, we assume the useEffect for selectedDomain runs quickly enough.
-    if (experience.domain && domainSpecificMap[experience.domain]) {
-      setAvailableSpecificDomains(domainSpecificMap[experience.domain]);
-    } else {
-      setAvailableSpecificDomains([]);
-    }
     setValue('specificDomain', experience.specificDomain || '');
   };
   
@@ -408,9 +395,9 @@ export default function ExperiencePage() {
                     className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
                   >
                     <option value="">Sélectionner un domaine</option>
-                    {industryDomains.map(domain => (
-                      <option key={domain} value={domain}>
-                        {domain}
+                    {industryDomainOptions.map(option => (
+                      <option key={option.item_key} value={option.item_key}>
+                        {option.value}
                       </option>
                     ))}
                   </select>
@@ -429,12 +416,12 @@ export default function ExperiencePage() {
                     id="specificDomain"
                     {...register('specificDomain')}
                     className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                    disabled={!selectedDomain || availableSpecificDomains.length === 0} // Disable if no main domain or no specific options
+                    disabled={!selectedDomainKey || specificDomainOptions.length === 0}
                   >
                     <option value="">Sélectionner un domaine spécifique</option>
-                    {availableSpecificDomains.map(specDomain => (
-                      <option key={specDomain} value={specDomain}>
-                        {specDomain}
+                    {specificDomainOptions.map(option => (
+                      <option key={option.item_key} value={option.item_key}>
+                        {option.value}
                       </option>
                     ))}
                   </select>

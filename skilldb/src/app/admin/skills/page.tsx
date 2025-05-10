@@ -458,35 +458,43 @@ export default function AdminSkillsPage() {
                <tbody className="bg-white divide-y divide-gray-200">
                  {skillsWithDetails.map((skill) => (
                    <tr key={skill.id}>
-                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{skill.name}</td>
-                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{skill.family_name}</td>
-                     <td className="px-6 py-4 whitespace-normal text-sm text-gray-500 max-w-xs truncate">{skill.description}</td>
-                      <td className="px-6 py-4 whitespace-normal text-sm text-gray-500">
-                         {skill.versions.length > 0 ? (
-                            <ul className="list-disc list-inside">
-                                {skill.versions.map(v => <li key={v.id}>{v.version_name}</li>)}
-                            </ul>
-                         ) : (
-                            <span className="italic text-gray-400">Aucune</span>
+                     <td colSpan={5} className="px-6 py-4 whitespace-nowrap text-sm">
+                       <div className="flex flex-wrap items-center gap-2">
+                         <span className="font-semibold text-blue-800">{skill.name}</span>
+                         <span>·</span>
+                         <span>{skill.family_name || 'Famille inconnue'}</span>
+                         {skill.description && (
+                           <>
+                             <span>·</span>
+                             <span className="text-gray-500">{skill.description}</span>
+                           </>
                          )}
-                      </td>
-                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                       <Button
-                         variant="secondary"
-                         size="sm"
-                         className="text-blue-600 hover:text-blue-800 p-1"
-                         onClick={() => handleEdit(skill)}
-                       >
-                         Modifier
-                       </Button>
-                       <Button
-                         variant="secondary"
-                         size="sm"
-                         className="text-red-600 hover:text-red-800 p-1"
-                         onClick={() => handleDelete(skill)}
-                       >
-                         Supprimer
-                       </Button>
+                         <span>·</span>
+                         <span>
+                           {skill.versions.length > 0
+                             ? skill.versions.map(v => v.version_name).join(', ')
+                             : <span className="italic text-gray-400">Aucune version</span>
+                           }
+                         </span>
+                         <span className="ml-auto flex gap-2">
+                           <Button
+                             variant="secondary"
+                             size="sm"
+                             className="text-blue-600 hover:text-blue-800 p-1"
+                             onClick={() => handleEdit(skill)}
+                           >
+                             Modifier
+                           </Button>
+                           <Button
+                             variant="secondary"
+                             size="sm"
+                             className="text-red-600 hover:text-red-800 p-1"
+                             onClick={() => handleDelete(skill)}
+                           >
+                             Supprimer
+                           </Button>
+                         </span>
+                       </div>
                      </td>
                    </tr>
                  ))}

@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useForm, useFieldArray } from 'react-hook-form';
+import React, { useState, useEffect } from 'react';
+import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '@/context/AuthContext';
@@ -9,35 +9,25 @@ import { supabase } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { User } from '@/types';
+import { fetchMetadata, MetadataOption } from '@/lib/metadata';
 
-// Define schema for a single education entry
+// Define schema for a single education entry (maps to 'diplomas' table)
 const educationEntrySchema = z.object({
   degree: z.string().min(1, "Le choix d'un diplôme est requis"),
   qualification: z.string().min(1, "La qualification est requise"),
-  institutionName: z.string().min(1, "Le nom de l'établissement est requis"),
-  graduationYear: z.string()
+  institution_name: z.string().min(1, "Le nom de l'établissement est requis"), // Ensures schema matches DB
+  graduation_year: z.string() // Ensures schema matches DB
     .min(4, "L'année doit contenir 4 chiffres")
     .max(4, "L'année doit contenir 4 chiffres")
     .refine(val => {
       const yearNum = parseInt(val);
-      return !isNaN(yearNum) && yearNum > 1900 && yearNum <= new Date().getFullYear() + 10; // Allow few years in future
+      return !isNaN(yearNum) && yearNum > 1900 && yearNum <= new Date().getFullYear() + 10;
     }, { message: "Veuillez entrer une année valide (ex: 2023)." }),
-  id: z.string().optional() // Optional: for existing entries that might have an ID from DB
+  id: z.string().uuid().optional(), // From 'diplomas' table
+  user_id: z.string().uuid().optional(), // To associate with the user
 });
 
-const belgianDegrees = [
-  "", // For the default "Sélectionnez un diplôme" option
-  "Bachelier",
-  "Master",
-  "Master de spécialisation",
-  "Doctorat (PhD)",
-  "Agrégation de l'enseignement secondaire inférieur (AESI)",
-  "Agrégation de l'enseignement secondaire supérieur (AESS)",
-  "Certificat d'aptitudes pédagogiques (CAP)",
-  "Brevet de l'enseignement supérieur (BES)",
-  "Autre"
-];
-
+// Profile schema without educations
 const profileSchema = z.object({
   fullName: z.string().min(2, 'Le nom complet est requis'),
   role: z.enum(['developer', 'devops', 'pm', 'architect', 'admin']),
@@ -47,89 +37,257 @@ const profileSchema = z.object({
       message: "Le numéro de téléphone doit être valide (ex: +32 X XX XX XX ou 0X XX XX XX XX)",
     }),
   address: z.string().optional(),
-  // Replace single education fields with an array of education entries
-  educations: z.array(educationEntrySchema).optional(),
+  // educations field removed from here
 });
 
 type ProfileFormValues = z.infer<typeof profileSchema>;
+type EducationEntryFormValues = z.infer<typeof educationEntrySchema>;
 
-// Extend User type if 'educations' field is not already present
-interface UserWithEducation extends User {
-  educations?: ProfileFormValues['educations'];
-}
+// User type might not need UserWithEducation if we always fetch diplomas separately
+// interface UserWithEducation extends User {
+//   educations?: EducationEntryFormValues[]; // Or a type matching diploma table structure
+// }
 
 export default function ProfilePage() {
   const { user: authUser, loading } = useAuth();
-  const user = authUser as UserWithEducation | null; // Cast user to include educations
+  // const user = authUser as UserWithEducation | null; // Adjust if UserWithEducation is removed
+  const user = authUser; // Simpler user type now
 
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [updateSuccess, setUpdateSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isProfileUpdating, setIsProfileUpdating] = useState(false); // Renamed from isUpdating
+  const [profileUpdateSuccess, setProfileUpdateSuccess] = useState(false); // Renamed
+  const [profileError, setProfileError] = useState<string | null>(null); // Renamed
+  
+  const [educationOpSuccess, setEducationOpSuccess] = useState<string | null>(null);
+  const [educationOpError, setEducationOpError] = useState<string | null>(null);
 
-  const { register, handleSubmit, control, formState: { errors } } = useForm<ProfileFormValues>({
+
+  const [degreeOptions, setDegreeOptions] = useState<MetadataOption[]>([]);
+  
+  // State for managing the list of diplomas displayed on the client
+  const [displayedDiplomas, setDisplayedDiplomas] = useState<EducationEntryFormValues[]>([]);
+
+  const [showEducationForm, setShowEducationForm] = useState(false);
+  const [editingEducationIdx, setEditingEducationIdx] = useState<number | null>(null); // Index in the 'fields' array
+  const [editingDiplomaId, setEditingDiplomaId] = useState<string | null>(null); // Actual ID from DB
+
+  const { register: registerProfile, handleSubmit: handleSubmitProfile, control: controlProfile, formState: { errors: profileErrors } } = useForm<ProfileFormValues>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
       fullName: user?.fullName || '',
       role: (user?.role as 'developer' | 'devops' | 'pm' | 'architect' | 'admin') || 'developer',
       phoneNumber: user?.phoneNumber || '',
       address: user?.address || "Blarenberglaan 2, 2800 Mechelen",
-      // Initialize educations with user data or one empty entry
-      educations: user?.educations && user.educations.length > 0 
-        ? user.educations.map(edu => ({ 
-            degree: edu.degree || '', // ensure mapping from potential old structure or provide default
-            qualification: edu.qualification || '', 
-            institutionName: edu.institutionName || '', 
-            graduationYear: edu.graduationYear || '' ,
-            id: edu.id // Preserve ID if it exists
-          }))
-        : [{ degree: '', qualification: '', institutionName: '', graduationYear: '' }],
     },
   });
-
-  const { fields, append, remove } = useFieldArray({
-    control,
-    name: "educations"
+  
+  // Removed useFieldArray hook that was tied to controlProfile
+  
+  // Form for the education inline sub-form
+  const educationInlineFormMethods = useForm<EducationEntryFormValues>({
+    resolver: zodResolver(educationEntrySchema),
+    defaultValues: {
+      degree: '',
+      qualification: '',
+      institution_name: '',
+      graduation_year: '',
+      id: undefined,
+      user_id: user?.id
+    }
   });
+  const { 
+    register: registerEducation, 
+    handleSubmit: handleSubmitEducation, 
+    formState: { errors: educationErrors, isSubmitting: isEducationSubmitting }, 
+    reset: resetEducationForm,
+    setValue: setEducationValue, // Added setValue
+    control: controlEducation 
+  } = educationInlineFormMethods;
 
-  const onSubmit = async (data: ProfileFormValues) => {
+  // Effect to fetch degrees metadata and existing diplomas
+  useEffect(() => {
+    fetchMetadata('degrees').then(setDegreeOptions);
+
+    if (user?.id) {
+      const fetchDiplomas = async () => {
+        const { data, error } = await supabase
+          .from('diplomas')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          console.error('Error fetching diplomas:', error);
+          setEducationOpError('Erreur lors du chargement des diplômes.');
+        } else {
+          const mappedData = data.map(d => ({...d, id: d.id, user_id: d.user_id, degree: d.degree, qualification: d.qualification, institution_name: d.institution_name, graduation_year: d.graduation_year })) as EducationEntryFormValues[];
+          setDisplayedDiplomas(mappedData); // Populate state with fetched diplomas
+        }
+      };
+      fetchDiplomas();
+      setEducationValue('user_id', user.id);
+    } else {
+        setDisplayedDiplomas([]); // Clear diplomas if no user
+    }
+  }, [user, setEducationValue]); // Removed replace from dependencies as it's no longer from useFieldArray
+
+
+  const handleAddNewEducationClick = () => {
+    resetEducationForm({ degree: '', qualification: '', institution_name: '', graduation_year: '', id: undefined, user_id: user?.id });
+    setEditingEducationIdx(null);
+    setEditingDiplomaId(null);
+    setShowEducationForm(true);
+    setEducationOpSuccess(null);
+    setEducationOpError(null);
+  };
+
+  const handleEditEducationClick = (index: number) => {
+    const diplomaToEdit = displayedDiplomas[index]; // Get from state
+    if (diplomaToEdit && diplomaToEdit.id) {
+        resetEducationForm({
+          degree: diplomaToEdit.degree,
+          qualification: diplomaToEdit.qualification,
+          institution_name: diplomaToEdit.institution_name,
+          graduation_year: diplomaToEdit.graduation_year,
+          id: diplomaToEdit.id,
+          user_id: diplomaToEdit.user_id || user?.id
+        });
+        setEditingEducationIdx(index);
+        setEditingDiplomaId(diplomaToEdit.id);
+        setShowEducationForm(true);
+        setEducationOpSuccess(null);
+        setEducationOpError(null);
+    }
+  };
+
+  const handleCancelEducationForm = () => {
+    setShowEducationForm(false);
+    setEditingEducationIdx(null);
+    setEditingDiplomaId(null);
+    resetEducationForm({ degree: '', qualification: '', institution_name: '', graduation_year: '', id: undefined, user_id: user?.id });
+    setEducationOpSuccess(null);
+    setEducationOpError(null);
+  };
+
+  // SAVING/UPDATING an education entry
+  const onSaveEducationEntry = async (data: EducationEntryFormValues) => {
+    if (!user?.id) {
+      setEducationOpError("Utilisateur non identifié.");
+      return;
+    }
+    setEducationOpSuccess(null);
+    setEducationOpError(null);
+
+    // Corrected and simplified diplomaPayload structure
+    const diplomaPayload = {
+      user_id: user.id,
+      degree: data.degree,
+      qualification: data.qualification,
+      institution_name: data.institution_name, // Directly from form data, matching schema
+      graduation_year: data.graduation_year, // Directly from form data, matching schema
+    };
+
+    if (editingDiplomaId && editingEducationIdx !== null) { // UPDATE existing diploma
+      const { data: updatedData, error: updateError } = await supabase
+        .from('diplomas')
+        .update(diplomaPayload)
+        .eq('id', editingDiplomaId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('Error updating diploma:', updateError);
+        setEducationOpError('Erreur lors de la mise à jour du diplôme.');
+      } else if (updatedData) {
+        const newDisplayedDiplomas = [...displayedDiplomas];
+        newDisplayedDiplomas[editingEducationIdx] = { 
+            ...updatedData, 
+            // No mapping needed if schema and DB are aligned (institution_name, graduation_year)
+        } as EducationEntryFormValues;
+        setDisplayedDiplomas(newDisplayedDiplomas);
+        setEducationOpSuccess('Diplôme mis à jour avec succès !');
+        setShowEducationForm(false);
+        setEditingEducationIdx(null);
+        setEditingDiplomaId(null);
+      }
+    } else { // CREATE new diploma
+      const { data: insertedData, error: insertError } = await supabase
+        .from('diplomas')
+        .insert(diplomaPayload)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Error inserting diploma:', insertError);
+        setEducationOpError('Erreur lors de l\'ajout du diplôme.');
+      } else if (insertedData) {
+        // Add the new diploma to the displayed list
+        setDisplayedDiplomas(prevDiplomas => [...prevDiplomas, 
+            { 
+                ...insertedData, 
+                // No mapping needed if schema and DB are aligned
+            } as EducationEntryFormValues]);
+        setEducationOpSuccess('Diplôme ajouté avec succès !');
+        setShowEducationForm(false);
+      }
+    }
+    resetEducationForm({ degree: '', qualification: '', institution_name: '', graduation_year: '', id: undefined, user_id: user?.id });
+    setTimeout(() => { setEducationOpSuccess(null); setEducationOpError(null); }, 3000);
+  };
+  
+  // DELETING an education entry
+  const handleDeleteEducation = async (diplomaId: string, index: number) => {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce diplôme ?")) return;
+    setEducationOpSuccess(null);
+    setEducationOpError(null);
+
+    const { error: deleteError } = await supabase
+      .from('diplomas')
+      .delete()
+      .eq('id', diplomaId);
+
+    if (deleteError) {
+      console.error('Error deleting diploma:', deleteError);
+      setEducationOpError('Erreur lors de la suppression du diplôme.');
+    } else {
+      // Remove from displayed list
+      setDisplayedDiplomas(prevDiplomas => prevDiplomas.filter((_, i) => i !== index));
+      setEducationOpSuccess('Diplôme supprimé avec succès !');
+    }
+    setTimeout(() => { setEducationOpSuccess(null); setEducationOpError(null); }, 3000);
+  };
+
+
+  // Main profile form submission (only for user's own fields)
+  const onProfileSubmit = async (data: ProfileFormValues) => {
     if (!user) return;
     
-    setIsUpdating(true);
-    setUpdateSuccess(false);
-    setError(null);
+    setIsProfileUpdating(true);
+    setProfileUpdateSuccess(false);
+    setProfileError(null);
     
     try {
-      const updatePayload: Partial<Omit<ProfileFormValues, 'educations'> & { phone_number?: string; educations?: any[] }> = {
+      // Payload no longer includes educations
+      const updatePayload = {
         fullName: data.fullName,
         role: data.role,
         phone_number: data.phoneNumber,
         address: data.address,
-        educations: data.educations ? data.educations.map(edu => ({
-            degree: edu.degree,
-            qualification: edu.qualification,
-            institutionName: edu.institutionName,
-            graduationYear: edu.graduationYear
-        })) : [],
       };
       
-      const { data: updateData, error: updateError } = await supabase
+      const { error: updateError } = await supabase
         .from('users')
         .update(updatePayload)
         .eq('id', user.id);
       
       if (updateError) throw updateError;
       
-      setUpdateSuccess(true);
-      
-      // Attendez 3 secondes avant de masquer le message de succès
-      setTimeout(() => {
-        setUpdateSuccess(false);
-      }, 3000);
+      setProfileUpdateSuccess(true);
+      setTimeout(() => setProfileUpdateSuccess(false), 3000);
     } catch (err: any) {
       console.error('Error updating profile:', err);
-      setError(err.message || 'Une erreur est survenue lors de la mise à jour du profil');
+      setProfileError(err.message || 'Une erreur est survenue lors de la mise à jour du profil.');
     } finally {
-      setIsUpdating(false);
+      setIsProfileUpdating(false);
     }
   };
 
@@ -154,6 +312,7 @@ export default function ProfilePage() {
     <div className="max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold text-gray-900 mb-8">Mon Profil</h1>
       
+      {/* Profile Information Form */}
       <div className="bg-white shadow-md rounded-lg overflow-hidden mb-10">
         <div className="px-4 py-5 sm:px-6 bg-gradient-to-r from-gray-50 to-gray-100">
           <h3 className="text-lg font-medium leading-6 text-gray-800">
@@ -165,25 +324,24 @@ export default function ProfilePage() {
         </div>
         
         <div className="px-4 py-5 sm:p-6">
-          {error && (
+          {profileError && (
             <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
-              {error}
+              {profileError}
             </div>
           )}
-          
-          {updateSuccess && (
+          {profileUpdateSuccess && (
             <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md">
               Profil mis à jour avec succès !
             </div>
           )}
           
-          <form onSubmit={handleSubmit(onSubmit as any)} className="space-y-6">
+          <form onSubmit={handleSubmitProfile(onProfileSubmit)} className="space-y-6">
             <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
               <div className="sm:col-span-3">
                 <Input 
                   label="Email" 
                   type="email" 
-                  value={user.email}
+                  value={user.email || ''}
                   disabled
                 />
               </div>
@@ -192,8 +350,8 @@ export default function ProfilePage() {
                 <Input 
                   label="Nom complet" 
                   type="text" 
-                  {...register('fullName')}
-                  error={errors.fullName?.message}
+                  {...registerProfile('fullName')}
+                  error={profileErrors.fullName?.message}
                 />
               </div>
               
@@ -202,7 +360,7 @@ export default function ProfilePage() {
                   Rôle
                 </label>
                 <select
-                  {...register('role')}
+                  {...registerProfile('role')}
                   className="mt-1 block w-full pl-3 pr-10 py-2 text-base border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 >
                   <option value="developer">Développeur</option>
@@ -211,8 +369,8 @@ export default function ProfilePage() {
                   <option value="architect">Architecte</option>
                   {user.role === 'admin' && <option value="admin">Administrateur</option>}
                 </select>
-                {errors.role && (
-                  <p className="mt-1 text-sm text-red-600">{errors.role.message}</p>
+                {profileErrors.role && (
+                  <p className="mt-1 text-sm text-red-600">{profileErrors.role.message}</p>
                 )}
               </div>
 
@@ -221,8 +379,8 @@ export default function ProfilePage() {
                   label="Numéro de téléphone" 
                   type="tel" 
                   placeholder="+32 XXX XX XX XX / 0XXX XX XX XX"
-                  {...register('phoneNumber')}
-                  error={errors.phoneNumber?.message}
+                  {...registerProfile('phoneNumber')}
+                  error={profileErrors.phoneNumber?.message}
                 />
               </div>
 
@@ -230,103 +388,15 @@ export default function ProfilePage() {
                 <Input 
                   label="Adresse" 
                   type="text" 
-                  {...register('address')}
-                  error={errors.address?.message}
+                  {...registerProfile('address')}
+                  error={profileErrors.address?.message}
                 />
               </div>
             </div>
-            
-            {/* Education Section - Modified for useFieldArray */}
-            <div className="pt-6 mt-6 border-t border-gray-200">
-              <div className="flex justify-between items-center mb-2">
-                <div>
-                  <h3 className="text-lg font-medium leading-6 text-gray-900">
-                    Éducation et Diplômes
-                  </h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Ajoutez ici vos informations de formation.
-                  </p>
-                </div>
-                <Button 
-                  type="button" 
-                  onClick={() => append({ degree: '', qualification: '', institutionName: '', graduationYear: '' })}
-                  variant="secondary"
-                  size="sm"
-                >
-                  Ajouter une formation
-                </Button>
-              </div>
-
-              {fields.map((field, index) => (
-                <div key={field.id} className="mt-6 p-4 border border-gray-200 rounded-md space-y-4 mb-4 relative">
-                  <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
-                    <div className="sm:col-span-3">
-                      <label htmlFor={`educations.${index}.degree`} className="block text-sm font-medium text-gray-700">
-                        {`Diplôme #${index + 1}`}
-                      </label>
-                      <select
-                        id={`educations.${index}.degree`}
-                        {...register(`educations.${index}.degree`)}
-                        className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm"
-                      >
-                        {belgianDegrees.map(degreeName => (
-                          <option key={degreeName} value={degreeName}>
-                            {degreeName === "" ? "Sélectionnez un diplôme" : degreeName}
-                          </option>
-                        ))}
-                      </select>
-                      {errors.educations?.[index]?.degree && (
-                        <p className="mt-1 text-sm text-red-600">{errors.educations?.[index]?.degree?.message}</p>
-                      )}
-                    </div>
-                    <div className="sm:col-span-3">
-                      <Input 
-                        label={`Qualification #${index + 1}`}
-                        type="text" 
-                        {...register(`educations.${index}.qualification`)}
-                        error={errors.educations?.[index]?.qualification?.message}
-                      />
-                    </div>
-                    
-                    <div className="sm:col-span-3">
-                      <Input 
-                        label="Établissement"
-                        type="text" 
-                        {...register(`educations.${index}.institutionName`)}
-                        error={errors.educations?.[index]?.institutionName?.message}
-                      />
-                    </div>
-                    
-                    <div className="sm:col-span-3">
-                      <Input 
-                        label="Année d'obtention"
-                        type="text"
-                        placeholder="YYYY"
-                        {...register(`educations.${index}.graduationYear`)}
-                        error={errors.educations?.[index]?.graduationYear?.message}
-                      />
-                    </div>
-                  </div>
-                  {fields.length > 1 && (
-                    <Button 
-                      type="button" 
-                      onClick={() => remove(index)}
-                      variant="danger"
-                      size="sm"
-                      className="absolute top-2 right-2"
-                    >
-                      Supprimer
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-            {/* End of Education Section */}
-
             <div className="pt-5 text-right">
               <Button
                 type="submit"
-                isLoading={isUpdating}
+                isLoading={isProfileUpdating}
               >
                 Mettre à jour le profil
               </Button>
@@ -335,7 +405,165 @@ export default function ProfilePage() {
         </div>
       </div>
       
+      {/* Education Section - Manages its own data via 'diplomas' table */}
+      <div className="bg-white shadow-md rounded-lg overflow-hidden mb-10">
+        <div className="px-4 py-5 sm:px-6 bg-gradient-to-r from-gray-50 to-gray-100">
+          <h3 className="text-lg font-medium leading-6 text-gray-800">
+            Éducation et Diplômes
+          </h3>
+           <p className="mt-1 text-sm text-gray-500">
+            Gérez vos diplômes et formations. Chaque entrée est sauvegardée individuellement.
+          </p>
+        </div>
+        <div className="px-4 py-5 sm:p-6">
+            {educationOpError && (
+                <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
+                    {educationOpError}
+                </div>
+            )}
+            {educationOpSuccess && (
+                <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md">
+                    {educationOpSuccess}
+                </div>
+            )}
+
+            {!showEducationForm && (
+              <div className="text-right mb-4">
+                <Button 
+                    type="button" 
+                    onClick={handleAddNewEducationClick}
+                    variant="secondary"
+                    size="sm"
+                >
+                    Ajouter une formation
+                </Button>
+              </div>
+            )}
+
+            {showEducationForm && (
+            <div className="mt-6 p-4 border border-blue-200 rounded-md bg-blue-50 space-y-4 mb-6 shadow">
+                <h4 className="text-md font-semibold text-gray-800 mb-3">
+                {editingDiplomaId ? 'Modifier la formation' : 'Ajouter une nouvelle formation'}
+                </h4>
+                <form
+                    onSubmit={(e) => { // Keep this form submission handling
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleSubmitEducation(onSaveEducationEntry)();
+                    }}
+                    className="space-y-4"
+                >
+                <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2">
+                    <div className="sm:col-span-1">
+                    <label htmlFor="eduDegreeInline" className="block text-sm font-medium text-gray-700">
+                        Diplôme
+                    </label>
+                    <select
+                        id="eduDegreeInline"
+                        {...registerEducation('degree')}
+                        className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm"
+                    >
+                        <option value="">Sélectionnez un diplôme</option>
+                        {degreeOptions.map(option => (
+                        <option key={option.item_key} value={option.item_key}>
+                            {option.value}
+                        </option>
+                        ))}
+                    </select>
+                    {educationErrors.degree && (
+                        <p className="mt-1 text-sm text-red-600">{educationErrors.degree.message}</p>
+                    )}
+                    </div>
+                    <div className="sm:col-span-1">
+                    <Input 
+                        label="Qualification"
+                        type="text" 
+                        {...registerEducation('qualification')}
+                        error={educationErrors.qualification?.message}
+                    />
+                    </div>
+                    <div className="sm:col-span-1">
+                    <Input 
+                        label="Établissement"
+                        type="text" 
+                        {...registerEducation('institution_name')} // Register with 'institution_name'
+                        error={educationErrors.institution_name?.message}
+                    />
+                    </div>
+                    <div className="sm:col-span-1">
+                    <Input 
+                        label="Année d'obtention"
+                        type="text"
+                        placeholder="YYYY"
+                        {...registerEducation('graduation_year')} // Register with 'graduation_year'
+                        error={educationErrors.graduation_year?.message}
+                    />
+                    </div>
+                </div>
+                <div className="flex justify-end space-x-3 pt-2">
+                    <Button type="button" variant="secondary" onClick={handleCancelEducationForm}>
+                    Annuler
+                    </Button>
+                    <Button type="button" onClick={() => handleSubmitEducation(onSaveEducationEntry)()} isLoading={isEducationSubmitting}>
+                    {editingDiplomaId ? 'Mettre à jour' : 'Enregistrer'}
+                    </Button>
+                </div>
+                </form>
+            </div>
+            )}
+
+            {/* Displaying the list of diplomas from state */}
+            {displayedDiplomas.length === 0 && !showEducationForm && (
+            <p className="text-sm text-gray-500 mt-4 text-center">Aucune formation ajoutée pour le moment.</p>
+            )}
+
+            <div className="space-y-3 mt-4">
+            {displayedDiplomas.map((currentDiploma, index) => {
+                return (
+                    <div key={currentDiploma.id || index} className="p-4 border border-gray-200 rounded-md space-y-1 relative hover:shadow-md transition-shadow duration-150 bg-white">
+                    <div className="absolute top-3 right-3 space-x-2">
+                        <Button 
+                        type="button" 
+                        onClick={() => handleEditEducationClick(index)}
+                        variant="secondary" 
+                        size="sm"
+                        className="text-blue-600 hover:text-blue-800 p-1 disabled:opacity-50"
+                        disabled={showEducationForm && editingDiplomaId === currentDiploma.id}
+                        >
+                        Modifier
+                        </Button>
+                        <Button 
+                        type="button" 
+                        onClick={() => currentDiploma.id && handleDeleteEducation(currentDiploma.id, index)}
+                        variant="danger"
+                        size="sm"
+                        className="text-red-600 hover:text-red-800 p-1 disabled:opacity-50"
+                        disabled={showEducationForm || !currentDiploma.id}
+                        >
+                        Supprimer
+                        </Button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-md">
+                        <span className="font-semibold text-blue-800">
+                            {degreeOptions.find(d => d.item_key === currentDiploma.degree)?.value || currentDiploma.degree || 'Diplôme non spécifié'}
+                        </span>
+                        <span>·</span>
+                        <span>{currentDiploma.qualification || 'Qualification non spécifiée'}</span>
+                        <span>·</span>
+                        <span>{currentDiploma.institution_name || 'Établissement non spécifié'}</span>
+                        <span>·</span>
+                        <span>Année: {currentDiploma.graduation_year || 'Non spécifiée'}</span>
+                    </div>
+                    </div>
+                );
+            })}
+            </div>
+        </div>
+      </div>
+      
+      {/* Other sections like Skills, Experience, CV */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {/* ... (Skill, Soft skill, Experience, CV buttons) ... */}
         <div className="bg-white shadow-md rounded-lg p-6 flex flex-col h-full border border-gray-200 hover:shadow-lg transition-shadow duration-200">
           <h3 className="text-lg font-semibold text-gray-800 mb-3">
             Compétences techniques

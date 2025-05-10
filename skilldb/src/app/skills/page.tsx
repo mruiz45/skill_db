@@ -12,6 +12,7 @@ import Input from '@/components/ui/Input';
 import { Skill, UserSkill, Certification, Training } from '@/types';
 import { Database, Tables } from '@/types/supabase';
 import clsx from 'clsx';
+import { fetchMetadata, MetadataOption } from '@/lib/metadata';
 
 // Define types for Family and Version based on Supabase schema
 type SkillFamily = Tables<'skill_families'>;
@@ -109,6 +110,7 @@ export default function SkillsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<UserSkillWithDetails | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [skillLevelOptions, setSkillLevelOptions] = useState<MetadataOption[]>([]);
   
   const { 
       register, 
@@ -153,6 +155,12 @@ export default function SkillsPage() {
   const watchedCertifications = watch('certifications');
   const watchedTrainings = watch('trainings');
   
+  // Helper pour trouver la description du niveau à partir des options chargées
+  const getLevelDescriptionFromOptions = (levelKey: string): string => {
+    const option = skillLevelOptions.find(opt => opt.item_key === levelKey);
+    return option ? option.value : 'Inconnu';
+  };
+
   const fetchInitialData = useCallback(async () => {
     if (!user) return;
     setIsLoading(true);
@@ -250,7 +258,10 @@ export default function SkillsPage() {
 
   useEffect(() => {
     fetchInitialData();
-  }, [fetchInitialData]);
+    fetchMetadata('skill_levels').then(options => {
+      setSkillLevelOptions(options);
+    });
+  }, [fetchInitialData]); // Ajouter les dépendances si skillLevelOptions affecte d'autres logiques
 
   useEffect(() => {
     const fetchSkillsByFamily = async () => {
@@ -812,9 +823,9 @@ export default function SkillsPage() {
                 className={`mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md ${errors.level ? 'border-red-500' : ''}`}
               >
                  <option value="">-- Sélectionner un niveau --</option>
-                 {[1, 2, 3, 4, 5].map((levelValue) => (
-                  <option key={levelValue} value={levelValue}>
-                    {getLevelDescription(levelValue)}
+                 {skillLevelOptions.map((option) => (
+                  <option key={option.item_key} value={option.item_key}>
+                    {option.value}
                   </option>
                 ))}
               </select>
@@ -1111,65 +1122,47 @@ export default function SkillsPage() {
               {filteredUserSkills.map((userSkill) => (
                 <li key={userSkill.id} className="px-4 py-4 sm:px-6 hover:bg-gray-50 transition duration-150 ease-in-out">
                   <div className="flex items-center justify-between flex-wrap gap-y-2">
-                    <div className="truncate flex-grow pr-4">
-                      <p className="text-sm font-medium text-blue-600 truncate">
-                         {userSkill.skill?.family?.name} / {userSkill.skill?.name}
-                         {/* Version still only shown for hard skills */}
-                         {skillType === 'hard' && userSkill.version?.version_name && ` (${userSkill.version.version_name})`}
-                      </p>
-                      <p className="text-sm text-gray-500 flex items-center flex-wrap gap-x-2">
-                         <span>Niveau: <span className="font-semibold">{getLevelDescription(Number(userSkill.level))}</span></span>
-                         {/* Certification Badge (ALWAYS SHOWN if hasCertification) */}
-                         {userSkill.hasCertification && (
-                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                    <div className="flex flex-wrap items-center gap-2 flex-grow pr-4">
+                      <span className="font-semibold text-blue-800">
+                        {userSkill.skill?.family?.name} / {userSkill.skill?.name}
+                        {skillType === 'hard' && userSkill.version?.version_name && ` (${userSkill.version.version_name})`}
+                      </span>
+                      <span>·</span>
+                      <span>Niveau: <span className="font-semibold">{getLevelDescriptionFromOptions(String(userSkill.level))}</span></span>
+                      {userSkill.hasCertification && (
+                        <>
+                          <span>·</span>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                             Certifié
                           </span>
-                        )}
-                        {/* Training Badge (ALWAYS SHOWN if hasTrainings) */}
-                        {userSkill.hasTrainings && (
+                        </>
+                      )}
+                      {userSkill.hasTrainings && (
+                        <>
+                          <span>·</span>
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                             Formation(s)
                           </span>
-                        )}
-                      </p>
-                      {/* Trainings List (ALWAYS SHOWN if trainings exist) */}
-                      {userSkill.trainings && userSkill.trainings.length > 0 && (
-                        <details className="mt-1 group">
-                           <summary className="text-xs text-gray-500 font-semibold cursor-pointer hover:text-gray-700 list-none group-open:mb-1">
-                                Formations ({userSkill.trainings.length}) <span className="group-open:hidden">&#9658;</span><span className="hidden group-open:inline">&#9660;</span>
-                           </summary>
-                          <ul className="list-disc pl-5 space-y-0.5">
-                            {userSkill.trainings.map((training) => (
-                              <li key={training.id} className="text-xs text-gray-600">
-                                {training.name}
-                                {training.date && ` (${new Date(training.date).toLocaleDateString()})`}
-                                {training.provider && ` - ${training.provider}`}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
+                        </>
                       )}
-                      {/* Certifications List (ALWAYS SHOWN if certifications exist) */}
                       {userSkill.certifications && userSkill.certifications.length > 0 && (
-                         <details className="mt-1 group">
-                            <summary className="text-xs text-gray-500 font-semibold cursor-pointer hover:text-gray-700 list-none group-open:mb-1">
-                                Certifications ({userSkill.certifications.length}) <span className="group-open:hidden">&#9658;</span><span className="hidden group-open:inline">&#9660;</span>
-                           </summary>
-                           <ul className="list-disc pl-5 space-y-0.5">
-                            {userSkill.certifications.map((cert) => (
-                              <li key={cert.id} className="text-xs text-gray-600">
-                                {cert.name}
-                                {cert.date && ` (Obtenu: ${new Date(cert.date).toLocaleDateString()})`}
-                                {cert.expiryDate && ` (Expire: ${new Date(cert.expiryDate).toLocaleDateString()})`}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
+                        <>
+                          <span>·</span>
+                          <span>Certifications: {userSkill.certifications.map(c => c.name).join(', ')}</span>
+                        </>
                       )}
-                       {/* Comment Display (Always shown if exists) */}
-                       {userSkill.comment && (
-                           <p className="text-xs text-gray-500 mt-1 italic">Commentaire: {userSkill.comment}</p>
-                       )}
+                      {userSkill.trainings && userSkill.trainings.length > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>Formations: {userSkill.trainings.map(t => t.name).join(', ')}</span>
+                        </>
+                      )}
+                      {userSkill.comment && (
+                        <>
+                          <span>·</span>
+                          <span className="italic text-gray-500">{userSkill.comment}</span>
+                        </>
+                      )}
                     </div>
                      {/* Action Buttons */}
                     <div className="flex-shrink-0 flex space-x-2">
